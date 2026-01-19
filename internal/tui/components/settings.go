@@ -1,6 +1,8 @@
 package components
 
 import (
+	"fmt"
+	
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -40,6 +42,11 @@ type Settings struct {
 	connUserInput   textinput.Model
 	connPassInput   textinput.Model
 	connDBInput     textinput.Model
+	editingConnIndex int // -1 = new connection, >= 0 = editing existing
+	
+	// Status
+	status          string
+	isError         bool
 	
 	focusedInput    int
 }
@@ -57,6 +64,8 @@ type SettingsStyles struct {
 	ButtonActive lipgloss.Style
 	Selected   lipgloss.Style
 	Hint       lipgloss.Style
+	Success    lipgloss.Style
+	Error      lipgloss.Style
 }
 
 // NewSettings creates a new settings component
@@ -122,6 +131,15 @@ func NewSettings(styles SettingsStyles) Settings {
 // Show shows the settings modal
 func (s *Settings) Show() {
 	s.visible = true
+}
+
+// ShowForConnection shows settings modal and switches to Connections tab
+func (s *Settings) ShowForConnection() {
+	s.visible = true
+	s.activeTab = SettingsTabConnections
+	s.focusedInput = 0
+	// Clear all connection inputs
+	s.ClearConnection()
 }
 
 // Hide hides the settings modal
@@ -190,6 +208,33 @@ func (s Settings) GetModel() string {
 	return s.aiModelInput.Value()
 }
 
+// SetStatus sets the status message
+func (s *Settings) SetStatus(msg string, isError bool) {
+	s.status = msg
+	s.isError = isError
+}
+
+// ClearStatus clears the status message
+func (s *Settings) ClearStatus() {
+	s.status = ""
+	s.isError = false
+}
+
+// GetStatus returns the current status
+func (s Settings) GetStatus() (string, bool) {
+	return s.status, s.isError
+}
+
+// IsEditingConnection returns true if editing existing connection
+func (s Settings) IsEditingConnection() bool {
+	return s.editingConnIndex >= 0
+}
+
+// GetEditingConnIndex returns the index of connection being edited (-1 if new)
+func (s Settings) GetEditingConnIndex() int {
+	return s.editingConnIndex
+}
+
 // GetConnectionConfig returns the connection configuration
 func (s Settings) GetConnectionConfig() (name, driver, host, port, user, pass, db string) {
 	return s.connNameInput.Value(),
@@ -199,6 +244,37 @@ func (s Settings) GetConnectionConfig() (name, driver, host, port, user, pass, d
 		s.connUserInput.Value(),
 		s.connPassInput.Value(),
 		s.connDBInput.Value()
+}
+
+// LoadConnection loads connection data into the form for editing
+func (s *Settings) LoadConnection(name, driver, host string, port int, user, pass, database string, editIndex int) {
+	s.connNameInput.SetValue(name)
+	s.connHostInput.SetValue(host)
+	s.connPortInput.SetValue(fmt.Sprintf("%d", port))
+	s.connUserInput.SetValue(user)
+	s.connPassInput.SetValue(pass)
+	s.connDBInput.SetValue(database)
+	s.editingConnIndex = editIndex
+	
+	// Set driver index
+	for i, d := range s.connDrivers {
+		if d == driver {
+			s.connDriverIndex = i
+			break
+		}
+	}
+}
+
+// ClearConnection clears all connection form fields (for new connection)
+func (s *Settings) ClearConnection() {
+	s.connNameInput.SetValue("")
+	s.connHostInput.SetValue("")
+	s.connPortInput.SetValue("")
+	s.connUserInput.SetValue("")
+	s.connPassInput.SetValue("")
+	s.connDBInput.SetValue("")
+	s.connDriverIndex = 0
+	s.editingConnIndex = -1 // -1 means new connection
 }
 
 // NextTab moves to the next tab
@@ -446,6 +522,15 @@ func (s Settings) View() string {
 		content += s.viewAITab()
 	case SettingsTabConnections:
 		content += s.viewConnectionsTab()
+	}
+	
+	// Status message
+	if s.status != "" {
+		statusStyle := s.styles.Success
+		if s.isError {
+			statusStyle = s.styles.Error
+		}
+		content += "\n\n" + statusStyle.Render(s.status)
 	}
 
 	content += "\n\n" + s.styles.Hint.Render("Tab: switch tabs • ↑↓: navigate • ←→: select • Enter: save • Esc: close")

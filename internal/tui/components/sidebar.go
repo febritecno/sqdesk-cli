@@ -22,16 +22,29 @@ type ConnectionItem struct {
 	Active bool
 }
 
-func (c ConnectionItem) Title() string       { return c.Name }
+func (c ConnectionItem) Title() string {
+	if c.Active {
+		return "● " + c.Name
+	}
+	return "  " + c.Name
+}
 func (c ConnectionItem) Description() string { return c.Driver }
 func (c ConnectionItem) FilterValue() string { return c.Name }
 
 // DatabaseItem represents a database in the sidebar
-type DatabaseItem string
+type DatabaseItem struct {
+	name   string
+	active bool
+}
 
-func (d DatabaseItem) Title() string       { return string(d) }
+func (d DatabaseItem) Title() string {
+	if d.active {
+		return "● " + d.name
+	}
+	return "  " + d.name
+}
 func (d DatabaseItem) Description() string { return "" }
-func (d DatabaseItem) FilterValue() string { return string(d) }
+func (d DatabaseItem) FilterValue() string { return d.name }
 
 // TableItem represents a table in the sidebar
 type TableItem struct {
@@ -39,7 +52,12 @@ type TableItem struct {
 	selected bool
 }
 
-func (t TableItem) Title() string       { return t.name }
+func (t TableItem) Title() string {
+	if t.selected {
+		return "● " + t.name
+	}
+	return "  " + t.name
+}
 func (t TableItem) Description() string { return "" }
 func (t TableItem) FilterValue() string { return t.name }
 
@@ -135,6 +153,10 @@ func (s *Sidebar) AddConnection(conn ConnectionItem) {
 func (s *Sidebar) SetActiveConnection(index int) {
 	items := s.connList.Items()
 	for i, item := range items {
+		// Skip AddConnectionItem
+		if _, ok := item.(AddConnectionItem); ok {
+			continue
+		}
 		conn := item.(ConnectionItem)
 		conn.Active = (i == index)
 		items[i] = conn
@@ -156,12 +178,24 @@ func (s *Sidebar) SetTables(tables []string) {
 	s.tableList.SetItems(items)
 }
 
+// GetTables returns the list of table names
+func (s Sidebar) GetTables() []string {
+	items := s.tableList.Items()
+	tables := make([]string, len(items))
+	for i, item := range items {
+		if t, ok := item.(TableItem); ok {
+			tables[i] = t.name
+		}
+	}
+	return tables
+}
+
 // SetDatabases sets the list of databases
 func (s *Sidebar) SetDatabases(databases []string, current string) {
 	s.currentDB = current
 	items := make([]list.Item, len(databases))
 	for i, d := range databases {
-		items[i] = DatabaseItem(d)
+		items[i] = DatabaseItem{name: d, active: d == current}
 		if d == current {
 			s.dbList.Select(i)
 		}
@@ -174,12 +208,26 @@ func (s Sidebar) GetSelectedDatabase() string {
 	if s.dbList.SelectedItem() == nil {
 		return ""
 	}
-	return string(s.dbList.SelectedItem().(DatabaseItem))
+	return s.dbList.SelectedItem().(DatabaseItem).name
 }
 
 // GetCurrentDatabase returns the current active database
 func (s Sidebar) GetCurrentDatabase() string {
 	return s.currentDB
+}
+
+// SelectTable sets a table as selected
+func (s *Sidebar) SelectTable(tableName string) {
+	items := s.tableList.Items()
+	for i, item := range items {
+		t := item.(TableItem)
+		t.selected = (t.name == tableName)
+		items[i] = t
+		if t.name == tableName {
+			s.tableList.Select(i)
+		}
+	}
+	s.tableList.SetItems(items)
 }
 
 // SetSize sets the sidebar dimensions
@@ -335,7 +383,7 @@ func (s Sidebar) GetDatabases() []string {
     items := s.dbList.Items()
     dbs := make([]string, len(items))
     for i, item := range items {
-        dbs[i] = string(item.(DatabaseItem))
+        dbs[i] = item.(DatabaseItem).name
     }
     return dbs
 }

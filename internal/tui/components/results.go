@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -435,4 +436,50 @@ func (r *Results) PrevPage() {
 // GetRowCount returns the number of rows
 func (r Results) GetRowCount() int {
 	return r.rowCount
+}
+
+// CopySelectedRow copies the selected row data to clipboard
+func (r Results) CopySelectedRow() error {
+	cursor := r.table.Cursor()
+	start := r.page * r.pageSize
+	rowIdx := start + cursor
+	
+	if rowIdx >= len(r.rows) {
+		return fmt.Errorf("no row selected")
+	}
+	
+	row := r.rows[rowIdx]
+	var values []string
+	for _, col := range r.columns {
+		val := row[col]
+		values = append(values, fmt.Sprintf("%v", val))
+	}
+	
+	text := strings.Join(values, "\t")
+	return clipboard.WriteAll(text)
+}
+
+// CopyAllData copies all data to clipboard as TSV
+func (r Results) CopyAllData() error {
+	if len(r.rows) == 0 {
+		return fmt.Errorf("no data to copy")
+	}
+	
+	var lines []string
+	
+	// Header
+	lines = append(lines, strings.Join(r.columns, "\t"))
+	
+	// Rows
+	for _, row := range r.rows {
+		var values []string
+		for _, col := range r.columns {
+			val := row[col]
+			values = append(values, fmt.Sprintf("%v", val))
+		}
+		lines = append(lines, strings.Join(values, "\t"))
+	}
+	
+	text := strings.Join(lines, "\n")
+	return clipboard.WriteAll(text)
 }

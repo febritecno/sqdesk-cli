@@ -54,6 +54,29 @@ func (m *Model) View() string {
 			lipgloss.WithWhitespaceForeground(lipgloss.Color("#333333")),
 		)
 	}
+	
+	if m.state == StateConnModal && m.connModal.IsVisible() {
+		modalContent := m.connModal.View()
+		baseView = lipgloss.Place(
+			m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			modalContent,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#333333")),
+		)
+	}
+	
+	// Render Help modal if visible
+	if m.help.IsVisible() {
+		modalContent := m.help.View()
+		baseView = lipgloss.Place(
+			m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			modalContent,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("#333333")),
+		)
+	}
 
 	return baseView
 }
@@ -100,8 +123,14 @@ func (m *Model) renderMainContent() string {
 	if m.width < 80 {
 		sidebarWidth = 15
 	}
+	
+	// Right panel for completion (only when visible)
+	rightPanelWidth := 0
+	if m.completion.IsVisible() {
+		rightPanelWidth = 35
+	}
 
-	mainWidth := m.width - sidebarWidth - 1
+	mainWidth := m.width - sidebarWidth - rightPanelWidth - 1
 	contentHeight := m.height - 4 // header + footer + margins
 
 	editorHeight := contentHeight * 45 / 100
@@ -122,10 +151,17 @@ func (m *Model) renderMainContent() string {
 	results := m.renderResults(mainWidth, resultsHeight)
 
 	// Combine editor and results vertically
-	rightPane := lipgloss.JoinVertical(lipgloss.Left, editor, results)
+	centerPane := lipgloss.JoinVertical(lipgloss.Left, editor, results)
 
-	// Combine sidebar and right pane horizontally
-	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, rightPane)
+	// If completion is visible, add right panel
+	if m.completion.IsVisible() {
+		m.completion.SetWidth(rightPanelWidth - 2)
+		completionPane := m.renderCompletionPane(rightPanelWidth, contentHeight)
+		return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, centerPane, completionPane)
+	}
+
+	// Combine sidebar and center pane horizontally
+	return lipgloss.JoinHorizontal(lipgloss.Top, sidebar, centerPane)
 }
 
 // renderSidebar renders the sidebar with connections and tables
@@ -138,6 +174,20 @@ func (m *Model) renderSidebar(width, height int) string {
 func (m *Model) renderEditor(width, height int) string {
 	m.editor.SetSize(width, height)
 	return m.editor.View()
+}
+
+// renderCompletionPane renders the right-side completion panel
+func (m *Model) renderCompletionPane(width, height int) string {
+	title := m.styles.PanelTitle.Render("KEYWORDS")
+	popup := m.completion.View()
+	
+	content := title + "\n" + popup
+	
+	style := m.styles.Panel
+	return style.
+		Width(width).
+		Height(height).
+		Render(content)
 }
 
 // renderResults renders the query results
@@ -156,8 +206,9 @@ func (m *Model) renderFooter() string {
 		{"F5", "Run"},
 		{"Ctrl+G", "AI"},
 		{"Ctrl+K", "Refactor"},
-		{"Tab", "Switch"},
-		{"F2", "Settings"},
+		{"F1/F2", "Switch Pane"},
+		{"F3", "Keywords Panel"},
+		{"F4", "Help"},
 		{"Ctrl+Q", "Quit"},
 	}
 

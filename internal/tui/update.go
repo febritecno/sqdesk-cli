@@ -43,6 +43,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateAIPrompt(msg)
 		case StateSettings:
 			return m.updateSettings(msg)
+		case StateConnModal:
+			return m.updateConnModal(msg)
 		case StateNormal:
 			return m.updateNormal(msg)
 		}
@@ -182,6 +184,7 @@ func (m *Model) updateAIPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.aiPrompt.Hide()
+		m.aiPrompt.ClearContext()
 		m.state = StateNormal
 		return m, nil
 	case "enter":
@@ -194,6 +197,7 @@ func (m *Model) updateAIPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.aiPrompt.Hide()
+		m.aiPrompt.ClearContext()
 		m.state = StateNormal
 		return m, nil
 	default:
@@ -201,6 +205,86 @@ func (m *Model) updateAIPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.aiPrompt, cmd = m.aiPrompt.Update(msg)
 		return m, cmd
 	}
+}
+
+// updateConnModal handles connection modal state
+func (m *Model) updateConnModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.connModal.Hide()
+		m.state = StateNormal
+		return m, nil
+	case "up", "k":
+		m.connModal.MoveUp()
+		return m, nil
+	case "down", "j":
+		m.connModal.MoveDown()
+		return m, nil
+	case "enter":
+		action := m.connModal.GetSelectedAction()
+		connIdx := m.connModal.GetConnectionIndex()
+		m.connModal.Hide()
+		m.state = StateNormal
+		
+		switch action {
+		case components.ActionConnect:
+			// Connect to selected connection
+			if connIdx >= 0 && connIdx < len(m.config.Connections) {
+				// Test connection first
+				conn := m.config.Connections[connIdx]
+				m.connModal.SetStatus("Connecting...", false)
+				
+				// We need to run this async or just block briefly since it's a TUI
+				// For now, we'll block briefly as we don't have async msg handling set up for this yet
+				if err := m.TestConnection(&conn); err != nil {
+					m.connModal.SetStatus("Connection failed: "+err.Error(), true)
+					return m, nil
+				}
+				
+				// If test passes, proceed to connect
+				m.config.ActiveConnIndex = connIdx
+				m.sidebar.SetActiveConnection(connIdx)
+				if m.connector != nil {
+					m.connector.Close()
+				}
+				if err := m.Connect(); err != nil {
+					m.connModal.SetStatus("Connect error: "+err.Error(), true)
+					return m, nil
+				} else {
+					m.statusMessage = "Connected to " + m.config.Connections[connIdx].Name
+					m.isError = false
+					m.connModal.Hide()
+					m.state = StateNormal
+				}
+			}
+		case components.ActionEdit:
+			// Load connection for editing
+			if connIdx >= 0 && connIdx < len(m.config.Connections) {
+				conn := m.config.Connections[connIdx]
+				m.settings.LoadConnection(conn.Name, conn.Driver, conn.Host, conn.Port, conn.User, conn.Password, conn.Database, connIdx)
+				m.settings.SetTheme(m.config.Theme)
+				m.settings.SetAIProvider(m.config.AI.Provider)
+				m.settings.SetAPIKey(m.config.AI.APIKey)
+				m.settings.SetModel(m.config.AI.Model)
+				m.settings.Show()
+				m.state = StateSettings
+			}
+		case components.ActionDelete:
+			// Delete connection
+			if connIdx >= 0 && connIdx < len(m.config.Connections) {
+				connName := m.config.Connections[connIdx].Name
+				m.config.RemoveConnection(connIdx)
+				m.loadConnections()
+				m.config.Save()
+				m.statusMessage = "Deleted connection: " + connName
+				m.isError = false
+			}
+		case components.ActionCancel:
+			// Do nothing
+		}
+		return m, nil
+	}
+	return m, nil
 }
 
 // updateSettings handles settings modal state
@@ -223,16 +307,38 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Password: pass,
 				Database: database,
 			}
+			m.settings.SetStatus("Testing connection...", false)
 			if err := m.TestConnection(testCfg); err != nil {
-				m.statusMessage = "Test failed: " + err.Error()
-				m.isError = true
+				m.settings.SetStatus("❌ Test failed: "+err.Error(), true)
 			} else {
-				m.statusMessage = "Connection test successful!"
-				m.isError = false
+				m.settings.SetStatus("✅ Connection test successful!", false)
 			}
+		} else {
+			m.settings.SetStatus("❌ Please fill in name and host", true)
 		}
 		return m, nil
 	case "enter":
+		// Validate connection if on Connections tab
+		name, driver, host, port, user, pass, database := m.settings.GetConnectionConfig()
+		if name != "" && host != "" {
+			// Test connection before saving
+			testConn := config.DatabaseConfig{
+				Name:     name,
+				Driver:   driver,
+				Host:     host,
+				Port:     parsePort(port, driver),
+				User:     user,
+				Password: pass,
+				Database: database,
+			}
+			m.settings.SetStatus("Validating connection...", false)
+			if err := m.TestConnection(&testConn); err != nil {
+				m.settings.SetStatus("❌ ERROR: "+err.Error(), true)
+				return m, nil
+			}
+			m.settings.SetStatus("✅ CONNECTED!", false)
+		}
+		
 		// Apply settings
 		theme := m.settings.GetSelectedTheme()
 		if theme != m.config.Theme {
@@ -250,8 +356,7 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.aiProvider = provider
 		}
 		
-		// Handle new connection from Connections tab
-		name, driver, host, port, user, pass, database := m.settings.GetConnectionConfig()
+		// Handle connection from Connections tab
 		if name != "" && host != "" {
 			newConn := config.DatabaseConfig{
 				Name:     name,
@@ -263,26 +368,37 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Database: database,
 			}
 			
-			// Test connection before adding
-			if err := m.TestConnection(&newConn); err != nil {
-				m.statusMessage = "Connection failed: " + err.Error()
-				m.isError = true
-				return m, nil
-			}
-			
-			// Add to config
-			m.config.Connections = append(m.config.Connections, newConn)
-			m.config.ActiveConnIndex = len(m.config.Connections) - 1
-			m.loadConnections()
-			
-			// Connect to the new database
-			if err := m.Connect(); err != nil {
-				m.statusMessage = "Added but failed to connect: " + err.Error()
-				m.isError = true
+			if m.settings.IsEditingConnection() {
+				// Update existing connection
+				editIdx := m.settings.GetEditingConnIndex()
+				if editIdx >= 0 && editIdx < len(m.config.Connections) {
+					m.config.Connections[editIdx] = newConn
+					m.statusMessage = "Connection updated: " + name
+					m.isError = false
+					
+					// If updating active connection, reconnect
+					if m.config.ActiveConnIndex == editIdx {
+						if err := m.Connect(); err != nil {
+							m.statusMessage = "Updated but failed to connect: " + err.Error()
+							m.isError = true
+						}
+					}
+				}
 			} else {
-				m.statusMessage = "Connection added: " + name
-				m.isError = false
+				// Add new connection
+				m.config.Connections = append(m.config.Connections, newConn)
+				m.config.ActiveConnIndex = len(m.config.Connections) - 1
+				
+				// Connect to the new database
+				if err := m.Connect(); err != nil {
+					m.statusMessage = "Added but failed to connect: " + err.Error()
+					m.isError = true
+				} else {
+					m.statusMessage = "Connection added: " + name
+					m.isError = false
+				}
 			}
+			m.loadConnections()
 		}
 		
 		m.config.Save()
@@ -332,31 +448,88 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "ctrl+g":
+		// Set context if there's a selection
+		selectedText := m.editor.GetSelectedText()
+		if selectedText != m.editor.GetValue() {
+			m.aiPrompt.SetContext(selectedText)
+		} else {
+			m.aiPrompt.ClearContext()
+		}
 		m.aiPrompt.Show(components.AIPromptModeNL2SQL)
 		m.state = StateAIPrompt
 		return m, nil
 
 	case "ctrl+k":
+		// Set context if there's a selection
+		selectedText := m.editor.GetSelectedText()
+		if selectedText != m.editor.GetValue() {
+			m.aiPrompt.SetContext(selectedText)
+		} else {
+			m.aiPrompt.ClearContext()
+		}
 		m.aiPrompt.Show(components.AIPromptModeRefactor)
 		m.state = StateAIPrompt
 		return m, nil
-
-	case "f2":
-		m.settings.SetTheme(m.config.Theme)
-		m.settings.SetAIProvider(m.config.AI.Provider)
-		m.settings.SetAPIKey(m.config.AI.APIKey)
-		m.settings.SetModel(m.config.AI.Model)
-		m.settings.Show()
-		m.state = StateSettings
-		return m, nil
-
-	case "ctrl+right":
+		
+	case "f1":
 		m.FocusNext()
 		return m, nil
 
-	case "ctrl+left":
+	case "f2":
 		m.FocusPrev()
 		return m, nil
+	
+	case "f3":
+		// Toggle completion panel (show/hide)
+		if m.completion.IsVisible() {
+			m.completion.Hide()
+			m.statusMessage = "Keywords panel hidden"
+		} else {
+			m.triggerCompletion()
+			m.statusMessage = "Keywords panel shown"
+		}
+		m.isError = false
+		return m, nil
+	
+	case "f4":
+		// Toggle Help modal
+		m.help.Toggle()
+		return m, nil
+	}
+	
+	// Handle Help modal navigation when visible
+	if m.help.IsVisible() {
+		switch msg.String() {
+		case "left", "h":
+			m.help.PrevPage()
+			return m, nil
+		case "right", "l":
+			m.help.NextPage()
+			return m, nil
+		case "esc", "q":
+			m.help.Hide()
+			return m, nil
+		}
+	}
+
+	// Handle completion popup navigation (only when visible and editor focused)
+	if m.completion.IsVisible() && m.focusedPane == PaneEditor {
+		switch msg.String() {
+		case "up", "ctrl+p":
+			m.completion.MoveUp()
+			return m, nil
+		case "down", "ctrl+n":
+			m.completion.MoveDown()
+			return m, nil
+		case "tab":
+			// Accept completion - replace current word with suggestion
+			item := m.completion.GetSelected()
+			if item != nil {
+				m.editor.ReplaceCurrentWord(item.InsertText)
+			}
+			// Don't hide - keep panel open
+			return m, nil
+		}
 	}
 
 	// Handle pane-specific keys
@@ -367,6 +540,12 @@ func (m *Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Pass all keys to editor (for typing)
 		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
+		
+		// Auto-refresh completions if panel is visible (on change)
+		if m.completion.IsVisible() {
+			m.refreshCompletions()
+		}
+		
 		return m, cmd
 	case PaneResults:
 		return m.handleResultsKeys(msg)
@@ -407,28 +586,21 @@ func (m *Model) handleSidebarKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Handle Connections section
 		if section == components.SectionConnections {
 			if m.sidebar.IsAddConnectionSelected() {
+				// Show settings with Connections tab and clear form
 				m.settings.SetTheme(m.config.Theme)
 				m.settings.SetAIProvider(m.config.AI.Provider)
 				m.settings.SetAPIKey(m.config.AI.APIKey)
 				m.settings.SetModel(m.config.AI.Model)
-				m.settings.Show()
+				m.settings.ShowForConnection()
 				m.state = StateSettings
 				return m, nil
 			}
 			connIdx := m.sidebar.GetSelectedConnection()
 			if connIdx >= 0 && connIdx < len(m.config.Connections) {
-				m.config.ActiveConnIndex = connIdx
-				m.sidebar.SetActiveConnection(connIdx)
-				if m.connector != nil {
-					m.connector.Close()
-				}
-				if err := m.Connect(); err != nil {
-					m.statusMessage = "Connection failed: " + err.Error()
-					m.isError = true
-				} else {
-					m.statusMessage = "Connected to " + m.config.Connections[connIdx].Name
-					m.isError = false
-				}
+				// Show connection action modal
+				connName := m.config.Connections[connIdx].Name
+				m.connModal.Show(connName, connIdx)
+				m.state = StateConnModal
 			}
 			return m, nil
 		}
@@ -449,10 +621,17 @@ func (m *Model) handleSidebarKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if section == components.SectionTables {
 			tableName := m.sidebar.SelectedTable()
 			if tableName != "" {
+				// Mark table as selected
+				m.sidebar.SelectTable(tableName)
+				// Save to config
+				m.config.LastTable = tableName
+				m.config.Save()
 				// Insert SELECT * query
 				query := fmt.Sprintf("SELECT * FROM %s LIMIT 100;", tableName)
 				m.editor.SetValue(query)
 				m.FocusEditor()
+				m.statusMessage = "Selected table: " + tableName
+				m.isError = false
 			}
 			return m, nil
 		}
@@ -477,6 +656,26 @@ func (m *Model) handleResultsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "pgup", "ctrl+u":
 		m.results.PrevPage()
+		return m, nil
+	case "c":
+		// Copy selected row
+		if err := m.results.CopySelectedRow(); err != nil {
+			m.statusMessage = "Copy failed: " + err.Error()
+			m.isError = true
+		} else {
+			m.statusMessage = "Row copied to clipboard"
+			m.isError = false
+		}
+		return m, nil
+	case "C", "ctrl+shift+c":
+		// Copy all data
+		if err := m.results.CopyAllData(); err != nil {
+			m.statusMessage = "Copy failed: " + err.Error()
+			m.isError = true
+		} else {
+			m.statusMessage = fmt.Sprintf("All data (%d rows) copied to clipboard", m.results.GetRowCount())
+			m.isError = false
+		}
 		return m, nil
 	case "v":
 		// Cycle view modes
@@ -520,6 +719,7 @@ func (m *Model) updateLayout() {
 
 	m.sidebar.SetSize(sidebarWidth, contentHeight)
 	m.editor.SetSize(mainWidth, editorHeight)
+	m.editor.SetPosition(sidebarWidth, headerHeight+1) // +1 for newline
 	m.results.SetSize(mainWidth, resultsHeight)
 	
 	modalWidth := m.width * 60 / 100
