@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/febritecno/sqdesk/internal/db"
+	"github.com/febritecno/sqdesk-cli/internal/db"
 )
 
 const claudeAPIURL = "https://api.anthropic.com/v1/messages"

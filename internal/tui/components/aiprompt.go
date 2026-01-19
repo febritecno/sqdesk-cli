@@ -1,6 +1,9 @@
 package components
 
 import (
+	"fmt"
+	"strings"
+	
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -8,13 +11,15 @@ import (
 
 // AIPrompt component for AI input modal
 type AIPrompt struct {
-	input    textinput.Model
-	visible  bool
-	width    int
-	height   int
-	styles   AIPromptStyles
-	mode     AIPromptMode
-	onSubmit func(string)
+	input          textinput.Model
+	visible        bool
+	width          int
+	height         int
+	styles         AIPromptStyles
+	mode           AIPromptMode
+	onSubmit       func(string)
+	selectedText   string
+	hasContext     bool
 }
 
 // AIPromptMode indicates the type of AI operation
@@ -62,6 +67,18 @@ func (a *AIPrompt) Show(mode AIPromptMode) {
 	} else {
 		a.input.Placeholder = "Describe how to modify the SQL..."
 	}
+}
+
+// SetContext sets the selected text context
+func (a *AIPrompt) SetContext(text string) {
+	a.selectedText = text
+	a.hasContext = len(text) > 0
+}
+
+// ClearContext clears the context
+func (a *AIPrompt) ClearContext() {
+	a.selectedText = ""
+	a.hasContext = false
 }
 
 // Hide hides the AI prompt modal
@@ -122,6 +139,15 @@ func (a AIPrompt) View() string {
 	}
 
 	content := a.styles.Title.Render(title) + "\n\n"
+	
+	// Show context info if available
+	if a.hasContext {
+		lines := len(strings.Split(a.selectedText, "\n"))
+		chars := len(a.selectedText)
+		contextInfo := a.styles.Hint.Render(fmt.Sprintf("📝 Working with selection: %d lines, %d chars", lines, chars))
+		content += contextInfo + "\n\n"
+	}
+	
 	content += a.input.View() + "\n\n"
 	content += a.styles.Hint.Render("Press Enter to submit • Esc to cancel")
 

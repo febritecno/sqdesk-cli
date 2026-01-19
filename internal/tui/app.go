@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/febritecno/sqdesk/internal/config"
+	"github.com/febritecno/sqdesk-cli/internal/config"
 )
 
 // App represents the SQDesk TUI application

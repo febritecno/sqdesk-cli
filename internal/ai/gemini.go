@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/febritecno/sqdesk/internal/db"
+	"github.com/febritecno/sqdesk-cli/internal/db"
 )
 
 const geminiAPIURL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s"

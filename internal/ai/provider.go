@@ -1,7 +1,7 @@
 package ai
 
 import (
-	"github.com/febritecno/sqdesk/internal/db"
+	"github.com/febritecno/sqdesk-cli/internal/db"
 )
 
 // Provider interface for AI operations

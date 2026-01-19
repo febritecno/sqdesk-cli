@@ -3,7 +3,7 @@ package db
 import (
 	"fmt"
 
-	"github.com/febritecno/sqdesk/internal/config"
+	"github.com/febritecno/sqdesk-cli/internal/config"
 	"github.com/jmoiron/sqlx"
 
 	_ "github.com/go-sql-driver/mysql"

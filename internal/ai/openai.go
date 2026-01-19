@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/febritecno/sqdesk/internal/db"
+	"github.com/febritecno/sqdesk-cli/internal/db"
 )
 
 const openAIAPIURL = "https://api.openai.com/v1/chat/completions"

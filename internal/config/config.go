@@ -34,7 +34,10 @@ type Config struct {
 	AI              AIConfig         `yaml:"ai" mapstructure:"ai"`
 	Connections     []DatabaseConfig `yaml:"connections" mapstructure:"connections"`
 	ActiveConnIndex int              `yaml:"active_connection" mapstructure:"active_connection"`
+	LastDatabase    string           `yaml:"last_database" mapstructure:"last_database"`
+	LastTable       string           `yaml:"last_table" mapstructure:"last_table"`
 	FirstRun        bool             `yaml:"first_run" mapstructure:"first_run"`
+	KeyMap          KeyMap           `yaml:"keymap" mapstructure:"keymap"`
 }
 
 // DefaultConfig returns a default configuration
@@ -50,6 +53,7 @@ func DefaultConfig() *Config {
 		Connections:     []DatabaseConfig{},
 		ActiveConnIndex: -1,
 		FirstRun:        true,
+		KeyMap:          DefaultKeyMap(),
 	}
 }
 
@@ -131,7 +135,10 @@ func (c *Config) Save() error {
 	viper.Set("ai", c.AI)
 	viper.Set("connections", c.Connections)
 	viper.Set("active_connection", c.ActiveConnIndex)
+	viper.Set("last_database", c.LastDatabase)
+	viper.Set("last_table", c.LastTable)
 	viper.Set("first_run", c.FirstRun)
+	viper.Set("keymap", c.KeyMap)
 
 	return viper.WriteConfigAs(configPath)
 }

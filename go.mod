@@ -1,4 +1,4 @@
-module github.com/febritecno/sqdesk
+module github.com/febritecno/sqdesk-cli
 
 go 1.24.2
 

@@ -7,11 +7,13 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/febritecno/sqdesk/internal/ai"
-	"github.com/febritecno/sqdesk/internal/config"
-	"github.com/febritecno/sqdesk/internal/db"
-	"github.com/febritecno/sqdesk/internal/tui/components"
-	"github.com/febritecno/sqdesk/internal/tui/setup"
+	"github.com/febritecno/sqdesk-cli/internal/ai"
+	"github.com/febritecno/sqdesk-cli/internal/completion"
+	"github.com/febritecno/sqdesk-cli/internal/completion/sources"
+	"github.com/febritecno/sqdesk-cli/internal/config"
+	"github.com/febritecno/sqdesk-cli/internal/db"
+	"github.com/febritecno/sqdesk-cli/internal/tui/components"
+	"github.com/febritecno/sqdesk-cli/internal/tui/setup"
 )
 
 // Pane represents the focused pane
@@ -31,6 +33,7 @@ const (
 	StateNormal
 	StateAIPrompt
 	StateSettings
+	StateConnModal
 )
 
 // Model is the main application model
@@ -48,12 +51,20 @@ type Model struct {
 	aiProvider ai.Provider
 
 	// UI Components
-	sidebar   components.Sidebar
-	editor    components.Editor
-	results   components.Results
-	aiPrompt  components.AIPrompt
-	settings  components.Settings
-	wizard    *setup.Wizard
+	sidebar    components.Sidebar
+	editor     components.Editor
+	results    components.Results
+	aiPrompt   components.AIPrompt
+	settings   components.Settings
+	connModal  components.ConnectionModal
+	wizard     *setup.Wizard
+	completion components.CompletionPopup
+	help       components.Help
+
+	// Completion Engine
+	completionEngine *completion.Engine
+	schemaSource     *sources.SchemaSource
+	historySource    *sources.HistorySource
 
 	// State
 	state       AppState
@@ -135,6 +146,8 @@ func NewModel(cfg *config.Config) *Model {
 		ButtonActive: styles.ButtonActive,
 		Selected:     styles.SidebarSelected,
 		Hint:         styles.HelpDesc,
+		Success:      styles.SuccessText,
+		Error:        styles.ErrorText,
 	}
 
 	wizardStyles := setup.WizardStyles{
@@ -154,23 +167,94 @@ func NewModel(cfg *config.Config) *Model {
 		Success:      styles.SuccessText,
 	}
 
-	// Determine initial state
-	state := StateNormal
-	if cfg.FirstRun {
-		state = StateSetup
+	// Connection modal styles
+	connModalStyles := components.ConnectionModalStyles{
+		Modal:    styles.Modal,
+		Title:    styles.ModalTitle,
+		Item:     styles.Button,
+		Selected: styles.ButtonActive,
+		Hint:     styles.HelpDesc,
+		Success:  styles.SuccessText,
+		Error:    styles.ErrorText,
 	}
 
+	// Always start in normal state (removed setup wizard)
+	state := StateNormal
+	if cfg.FirstRun {
+		cfg.FirstRun = false
+		cfg.Save()
+	}
+
+	// Completion popup styles
+	completionStyles := components.CompletionStyles{
+		Border: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colors.Primary).
+			Padding(0, 1),
+		Item: lipgloss.NewStyle().
+			Foreground(colors.Text),
+		Selected: lipgloss.NewStyle().
+			Background(colors.Primary).
+			Foreground(colors.Background).
+			Bold(true),
+		Kind: lipgloss.NewStyle().
+			Foreground(colors.TextMuted),
+		Detail: lipgloss.NewStyle().
+			Foreground(colors.TextMuted).
+			Italic(true),
+	}
+
+	// Help modal styles
+	helpStyles := components.HelpStyles{
+		Modal: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colors.Primary).
+			Background(colors.BackgroundDark).
+			Padding(1, 2).
+			Width(50),
+		Title: lipgloss.NewStyle().
+			Foreground(colors.Primary).
+			Bold(true).
+			MarginBottom(1),
+		Category: lipgloss.NewStyle().
+			Foreground(colors.Accent).
+			Bold(true),
+		Key: lipgloss.NewStyle().
+			Foreground(colors.Primary).
+			Bold(true),
+		Desc: lipgloss.NewStyle().
+			Foreground(colors.Text),
+		Footer: lipgloss.NewStyle().
+			Foreground(colors.TextMuted).
+			MarginTop(1),
+	}
+
+	// Initialize completion engine
+	compEngine := completion.NewEngine()
+	schemaSource := sources.NewSchemaSource()
+	historySource := sources.NewHistorySource()
+	
+	compEngine.RegisterSource(sources.NewKeywordSource())
+	compEngine.RegisterSource(schemaSource)
+	compEngine.RegisterSource(historySource)
+
 	m := &Model{
-		config:      cfg,
-		styles:      styles,
-		state:       state,
-		focusedPane: PaneSidebar,
-		sidebar:     components.NewSidebar(sidebarStyles),
-		editor:      components.NewEditor(editorStyles),
-		results:     components.NewResults(resultsStyles),
-		aiPrompt:    components.NewAIPrompt(aiPromptStyles),
-		settings:    components.NewSettings(settingsStyles),
-		wizard:      setup.NewWizard(wizardStyles),
+		config:           cfg,
+		styles:           styles,
+		state:            state,
+		focusedPane:      PaneSidebar,
+		sidebar:          components.NewSidebar(sidebarStyles),
+		editor:           components.NewEditor(editorStyles),
+		results:          components.NewResults(resultsStyles),
+		aiPrompt:         components.NewAIPrompt(aiPromptStyles),
+		settings:         components.NewSettings(settingsStyles),
+		connModal:        components.NewConnectionModal(connModalStyles),
+		wizard:           setup.NewWizard(wizardStyles),
+		completion:       components.NewCompletionPopup(completionStyles),
+		help:             components.NewHelp(helpStyles),
+		completionEngine: compEngine,
+		schemaSource:     schemaSource,
+		historySource:    historySource,
 	}
 
 	// Initialize AI provider if configured
@@ -266,6 +350,9 @@ func (m *Model) Connect() error {
 
 	// Load available databases
 	m.LoadDatabases()
+	
+	// Restore last state (database and table)
+	m.RestoreLastState()
 
 	return nil
 }
@@ -320,6 +407,10 @@ func (m *Model) SwitchDatabase(dbName string) error {
 	// Update sidebar
 	m.LoadDatabases()
 	
+	// Save last database to config
+	m.config.LastDatabase = dbName
+	m.config.Save()
+	
 	m.statusMessage = "Switched to database: " + dbName
 	m.isError = false
 	return nil
@@ -364,8 +455,9 @@ func (m *Model) Disconnect() {
 func (m *Model) ExecuteQuery() {
 	// Use selected text if available, otherwise full content
 	sql := m.editor.GetSelectedText()
-	if sql == "" {
-		sql = m.editor.GetValue()
+	isSelection := false
+	if sql != m.editor.GetValue() {
+		isSelection = true
 	}
 
 	if strings.TrimSpace(sql) == "" {
@@ -388,7 +480,7 @@ func (m *Model) ExecuteQuery() {
 	reLine := regexp.MustCompile(`(?m)^--.*$`)
 	cleanSQL = reLine.ReplaceAllString(cleanSQL, "")
 	// Strip multi-line comments
-	reMulti := regexp.MustCompile(`(?s)/\*.*?\*/`)
+	reMulti := regexp.MustCompile(`(?s)/\\*.*?\\*/`)
 	cleanSQL = reMulti.ReplaceAllString(cleanSQL, "")
 	
 	trimmedSQL := strings.TrimSpace(strings.ToLower(cleanSQL))
@@ -403,11 +495,20 @@ func (m *Model) ExecuteQuery() {
 		rows, columns, err := m.connector.Query(sql)
 		if err != nil {
 			m.results.SetError(err)
-			m.statusMessage = "Query failed"
+			if isSelection {
+				m.statusMessage = "Selected query failed"
+			} else {
+				m.statusMessage = "Query failed"
+			}
 			m.isError = true
 		} else {
 			m.results.SetData(columns, rows)
-			m.statusMessage = fmt.Sprintf("Query returned %d rows", len(rows))
+			if isSelection {
+				lines := len(strings.Split(sql, "\n"))
+				m.statusMessage = fmt.Sprintf("Selected query (%d lines) returned %d rows", lines, len(rows))
+			} else {
+				m.statusMessage = fmt.Sprintf("Query returned %d rows", len(rows))
+			}
 			m.isError = false
 			// Default to table view for new results
 			m.results.SetViewMode(components.ViewTable)
@@ -417,11 +518,20 @@ func (m *Model) ExecuteQuery() {
 		affected, err := m.connector.Execute(sql)
 		if err != nil {
 			m.results.SetError(err)
-			m.statusMessage = "Execution failed"
+			if isSelection {
+				m.statusMessage = "Selected execution failed"
+			} else {
+				m.statusMessage = "Execution failed"
+			}
 			m.isError = true
 		} else {
 			m.results.SetMessage(fmt.Sprintf("Query executed successfully. %d rows affected.", affected))
-			m.statusMessage = fmt.Sprintf("Affected %d rows", affected)
+			if isSelection {
+				lines := len(strings.Split(sql, "\n"))
+				m.statusMessage = fmt.Sprintf("Selected query (%d lines) affected %d rows", lines, affected)
+			} else {
+				m.statusMessage = fmt.Sprintf("Affected %d rows", affected)
+			}
 			m.isError = false
 		}
 	}
@@ -468,7 +578,13 @@ func (m *Model) RefactorSQL(instruction string) {
 		return
 	}
 
-	currentSQL := m.editor.GetValue()
+	// Use selected text if available, otherwise full content
+	currentSQL := m.editor.GetSelectedText()
+	isSelection := false
+	if currentSQL != m.editor.GetValue() {
+		isSelection = true
+	}
+	
 	if currentSQL == "" {
 		m.statusMessage = "No SQL to refactor"
 		m.isError = true
@@ -483,7 +599,11 @@ func (m *Model) RefactorSQL(instruction string) {
 	}
 
 	m.editor.SetValue(sql)
-	m.statusMessage = "SQL refactored by AI"
+	if isSelection {
+		m.statusMessage = "Selected SQL refactored by AI"
+	} else {
+		m.statusMessage = "SQL refactored by AI"
+	}
 	m.isError = false
 }
 
@@ -552,6 +672,78 @@ func (m *Model) GetAIInfo() string {
 		return "AI: Disabled"
 	}
 	return fmt.Sprintf("%s: %s", m.aiProvider.GetProviderName(), m.aiProvider.GetModelName())
+}
+
+// RestoreLastState restores the last database and table selection
+func (m *Model) RestoreLastState() {
+	if !m.isConnected || m.connector == nil {
+		return
+	}
+	
+	// Restore last database if different from current
+	if m.config.LastDatabase != "" {
+		currentDB := m.connector.GetDatabaseName()
+		if currentDB != m.config.LastDatabase {
+			// Try to switch to last database
+			if err := m.SwitchDatabase(m.config.LastDatabase); err != nil {
+				// If failed, clear last database from config
+				m.config.LastDatabase = ""
+				m.config.Save()
+			}
+		}
+	}
+	
+	// Note: Last table restoration would need sidebar support
+	// which we'll implement when sidebar has SelectTable method
+}
+
+// triggerCompletion triggers the completion popup
+func (m *Model) triggerCompletion() {
+	// Get current query and cursor position
+	query := m.editor.GetValue()
+	cursor := m.editor.GetCursorPosition()
+	
+	// Get available tables for context
+	tables := m.sidebar.GetTables()
+	database := m.sidebar.GetCurrentDatabase()
+	
+	// Update schema source with current tables
+	m.schemaSource.LoadFromStrings(tables)
+	
+	// Get completions
+	items := m.completionEngine.Complete(query, cursor, database, tables)
+	
+	if len(items) > 0 {
+		// Show completion popup
+		m.completion.Show(items, 0, 0) // Position will be calculated in view
+		m.statusMessage = fmt.Sprintf("%d completions available", len(items))
+		m.isError = false
+	} else {
+		m.statusMessage = "No completions available"
+		m.isError = false
+	}
+}
+
+// refreshCompletions silently updates completions (no status message)
+func (m *Model) refreshCompletions() {
+	// Get current query and cursor position
+	query := m.editor.GetValue()
+	cursor := m.editor.GetCursorPosition()
+	
+	// Get available tables for context
+	tables := m.sidebar.GetTables()
+	database := m.sidebar.GetCurrentDatabase()
+	
+	// Update schema source with current tables
+	m.schemaSource.LoadFromStrings(tables)
+	
+	// Get completions
+	items := m.completionEngine.Complete(query, cursor, database, tables)
+	
+	if len(items) > 0 {
+		m.completion.Show(items, 0, 0)
+	}
+	// Don't hide if no items - keep panel visible
 }
 
 // Close cleans up resources

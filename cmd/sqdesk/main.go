@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/febritecno/sqdesk/internal/tui"
+	"github.com/febritecno/sqdesk-cli/internal/tui"
 )
 
 func main() {
